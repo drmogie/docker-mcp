@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""A fake `docker` for tests. Prints canned answers and records every call."""
+import json, os, sys
+
+args = sys.argv[1:]
+log = os.environ.get("FAKE_DOCKER_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(json.dumps({"args": args, "cwd": os.getcwd()}) + "\n")
+
+
+def lines(*rows):
+    for r in rows:
+        print(json.dumps(r))
+
+
+a = " ".join(args)
+if a.startswith("version"):
+    print("27.3.1")
+elif a.startswith("compose version"):
+    print("2.33.0")
+elif a.startswith("ps"):
+    lines(
+        {"Names": "plex", "Image": "plexinc/pms-docker", "State": "running", "Status": "Up 2 days (healthy)", "Ports": "", "Networks": "THEDMZ"},
+        {"Names": "seerr", "Image": "ghcr.io/seerr-team/seerr", "State": "exited", "Status": "Exited (1) 1 hour ago", "Ports": "", "Networks": "THEDMZ"},
+    )
+elif a.startswith("logs"):
+    print("2026-10-11T10:00:00Z start ok")
+    print("2026-10-11T10:00:01Z OPENVPN_PASSWORD=hunter2 connecting")
+    print("2026-10-11T10:00:02Z Authorization: Bearer abc123", file=sys.stderr)
+elif a.startswith("inspect"):
+    print(json.dumps([{
+        "Name": "/gluetun", "RestartCount": 0,
+        "Config": {"Image": "qmcgaw/gluetun", "User": "", "Cmd": None,
+                   "Env": ["TZ=America/Los_Angeles", "OPENVPN_USER=p1234567", "OPENVPN_PASSWORD=hunter2", "PUID=1000"],
+                   "Labels": {"com.docker.compose.project": "arr-downloads", "com.docker.compose.service": "gluetun"}},
+        "State": {"Status": "running", "Running": True, "ExitCode": 0, "Health": {"Status": "healthy"}},
+        "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}, "NetworkMode": "THEDMZ", "PortBindings": {}},
+        "NetworkSettings": {"Networks": {"THEDMZ": {"IPAddress": "172.16.30.59"}}},
+        "Mounts": [{"Type": "bind", "Source": "/opt/docker/gluetun", "Destination": "/gluetun", "RW": True}],
+    }]))
+elif a.startswith("volume inspect"):
+    print(json.dumps([{"Name": args[-1], "Driver": "local", "Mountpoint": "/var/lib/docker/volumes/x/_data",
+                       "Options": {"type": "nfs", "o": "addr=172.16.1.11,nfsvers=3,hard", "device": ":/volume2/THEMEDIA"},
+                       "Labels": {}, "CreatedAt": "2026-10-11T00:00:00Z"}]))
+elif a.startswith("volume ls"):
+    lines({"Name": "audiobookshelf_themedia", "Driver": "local"})
+elif a.startswith("network ls"):
+    lines({"Name": "THEDMZ", "Driver": "macvlan", "Scope": "local"})
+elif a.startswith("images"):
+    lines({"Repository": "plexinc/pms-docker", "Tag": "latest", "ID": "abc", "Size": "400MB", "CreatedSince": "2 weeks ago"})
+elif a.startswith("stats"):
+    lines({"Name": "plex", "CPUPerc": "1.0%", "MemUsage": "300MiB / 8GiB", "MemPerc": "3.6%", "NetIO": "1MB / 2MB", "BlockIO": "0B / 0B"})
+elif a.startswith("system df"):
+    lines({"Type": "Images", "TotalCount": "3", "Size": "1GB", "Reclaimable": "0B"})
+elif a.startswith("compose ls"):
+    print(json.dumps([{"Name": "arr-apps", "Status": "running(5)", "ConfigFiles": os.environ.get("FAKE_STACK_FILE", "")}]))
+elif a.startswith("compose ps"):
+    lines({"Service": "radarr", "Name": "radarr", "Image": "lscr.io/linuxserver/radarr", "State": "running", "Health": "", "Status": "Up 1 hour",
+           "Publishers": [{"PublishedPort": 7878, "TargetPort": 7878}]})
+elif a.startswith("compose config"):
+    print("services:\n  gluetun:\n    environment:\n      OPENVPN_PASSWORD: hunter2\n      TZ: America/Los_Angeles")
+elif a.startswith("exec"):
+    print("ran:", " ".join(args[2:]))
+elif a.startswith("fail"):
+    print("boom", file=sys.stderr)
+    sys.exit(1)
+else:
+    print("ok")
