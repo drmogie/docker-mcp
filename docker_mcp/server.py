@@ -20,6 +20,16 @@ For each host name (letters, digits; other characters become "_", upper case):
   DOCKER_MCP_<NAME>_SUDO        "true" to run docker with `sudo -n` (needs passwordless sudo)
   DOCKER_MCP_<NAME>_STACKS      folder with one sub folder per Compose stack (default /opt/stacks)
 
+Shared settings (used by every host that does not set its own):
+
+  DOCKER_MCP_SSH_USER     login name. The host name is then used as the address
+                          (user@name), so you only list the names in DOCKER_MCP_HOSTS.
+  DOCKER_MCP_SSH_KEY      one private key for all hosts
+  DOCKER_MCP_SSH_PORT     SSH port for all hosts
+  DOCKER_MCP_SUDO         "true" to use `sudo -n` on all hosts
+  DOCKER_MCP_STACKS       Compose stacks folder for all hosts
+  A host's own <NAME> setting always wins over the shared one.
+
 Other settings:
 
   DOCKER_MCP_READ_ONLY  "true" to refuse every change
@@ -49,7 +59,7 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
-__version__ = "2026.10.12.01"
+__version__ = "2026.10.20.01"
 
 mcp = FastMCP("docker")
 
@@ -124,16 +134,28 @@ def _hosts() -> dict[str, dict[str, Any]]:
     names = [n.strip() for n in os.environ.get("DOCKER_MCP_HOSTS", "").split(",") if n.strip()]
     if not names:
         names = ["local"]
+    # Shared defaults, used by every host that does not set its own value.
+    d_user = os.environ.get("DOCKER_MCP_SSH_USER", "").strip()
+    d_port = os.environ.get("DOCKER_MCP_SSH_PORT", "").strip()
+    d_key = os.environ.get("DOCKER_MCP_SSH_KEY", "").strip()
+    d_sudo = os.environ.get("DOCKER_MCP_SUDO")
+    d_stacks = os.environ.get("DOCKER_MCP_STACKS", "").strip()
     hosts: dict[str, dict[str, Any]] = {}
     for n in names:
         p = f"DOCKER_MCP_{_env_key(n)}_"
+        ssh = os.environ.get(p + "SSH", "").strip()
+        if not ssh and d_user and n.lower() != "local":
+            # Shared user: the host name is also the address.
+            ssh = f"{d_user}@{n}"
+        sudo_raw = os.environ.get(p + "SUDO")
+        stacks = os.environ.get(p + "STACKS", "").strip() or d_stacks or "/opt/stacks"
         hosts[n] = {
             "name": n,
-            "ssh": os.environ.get(p + "SSH", "").strip(),
-            "port": os.environ.get(p + "SSH_PORT", "").strip(),
-            "key": os.environ.get(p + "SSH_KEY", "").strip(),
-            "sudo": _truthy(os.environ.get(p + "SUDO")),
-            "stacks": (os.environ.get(p + "STACKS", "").strip() or "/opt/stacks").rstrip("/") or "/",
+            "ssh": ssh,
+            "port": os.environ.get(p + "SSH_PORT", "").strip() or d_port,
+            "key": os.environ.get(p + "SSH_KEY", "").strip() or d_key,
+            "sudo": _truthy(sudo_raw if sudo_raw is not None else d_sudo),
+            "stacks": stacks.rstrip("/") or "/",
         }
     return hosts
 

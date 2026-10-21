@@ -56,7 +56,7 @@ Destructive (needs `confirm=true` and a typed phrase):
    then log out and back in.
    (Or set `DOCKER_MCP_THEMEDIA_SUDO=true` and allow `sudo` with no password for docker.)
 5. Copy the settings from `claude_desktop_config.example.json` into your Claude config. Change the key path.
-   `uvx` downloads the tool from GitHub, so no local copy is needed. To get a newer version, run `uvx --refresh --from git+https://github.com/drmogie/docker-mcp docker-mcp` once, or pin a release with `@2026.10.12.01` after the address.
+   `uvx` downloads the tool from GitHub, so no local copy is needed. To get a newer version, run `uvx --refresh --from git+https://github.com/drmogie/docker-mcp docker-mcp` once, or pin a release with `@2026.10.20.01` after the address.
 6. Restart Claude. Ask: "list my Docker hosts".
 
 ## Settings
@@ -70,6 +70,10 @@ Set in the `env` part of the Claude config.
   - `DOCKER_MCP_NAME_SSH_KEY`: path to the private key
   - `DOCKER_MCP_NAME_SUDO`: `true` to run docker with `sudo -n`
   - `DOCKER_MCP_NAME_STACKS`: folder with one sub folder per stack, default `/opt/stacks`
+- Shared settings, for many hosts with one key (a host's own setting always wins):
+  - `DOCKER_MCP_SSH_USER`: login name. The host name is used as the address (`user@name`)
+  - `DOCKER_MCP_SSH_KEY`: one private key for all hosts
+  - `DOCKER_MCP_SSH_PORT`, `DOCKER_MCP_SUDO`, `DOCKER_MCP_STACKS`: same idea
 - `DOCKER_MCP_READ_ONLY`: `true` refuses every change
 - `DOCKER_MCP_TIMEOUT`: seconds for normal commands, default 60
 - `DOCKER_MCP_LONG_TIMEOUT`: seconds for pull and up, default 900

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.20.01
+
+- Many hosts with one key: new shared settings DOCKER_MCP_SSH_USER, DOCKER_MCP_SSH_KEY, DOCKER_MCP_SSH_PORT, DOCKER_MCP_SUDO and DOCKER_MCP_STACKS.
+- With DOCKER_MCP_SSH_USER set, the host name is the address, so DOCKER_MCP_HOSTS="themedia,thedns01" is enough.
+- A host's own setting still wins over the shared one. Old configs work unchanged.
+
 ## 2026.10.12.01
 
 - First GitHub release. No code change.

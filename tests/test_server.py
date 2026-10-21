@@ -189,6 +189,26 @@ def unit_tests():
     check("redact: bearer token in a log line", "abc123" not in sv._redact_text("10:00 request Bearer abc123xyz ok"), sv._redact_text("10:00 request Bearer abc123xyz ok"))
     check("redact: normal lines kept", sv._redact_text("  TZ: America/Los_Angeles") == "  TZ: America/Los_Angeles")
 
+    # shared settings: many hosts, one key
+    import os
+    keep = {k: v for k, v in os.environ.items() if k.startswith("DOCKER_MCP_")}
+    for k in keep:
+        del os.environ[k]
+    os.environ.update({"DOCKER_MCP_HOSTS": "a,b,local", "DOCKER_MCP_SSH_USER": "theadmin", "DOCKER_MCP_SSH_KEY": "/k/id", "DOCKER_MCP_STACKS": "/srv/stacks", "DOCKER_MCP_B_SSH": "root@10.0.0.9", "DOCKER_MCP_B_STACKS": "/opt/b"})
+    hh = sv._hosts()
+    check("shared: host name becomes the address", hh["a"]["ssh"] == "theadmin@a", hh["a"])
+    check("shared: one key and stacks folder for every host", hh["a"]["key"] == "/k/id" and hh["a"]["stacks"] == "/srv/stacks", hh["a"])
+    check("shared: a host's own setting wins", hh["b"]["ssh"] == "root@10.0.0.9" and hh["b"]["stacks"] == "/opt/b" and hh["b"]["key"] == "/k/id", hh["b"])
+    check("shared: host called local stays local", hh["local"]["ssh"] == "", hh["local"])
+    for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
+        del os.environ[k]
+    os.environ.update({"DOCKER_MCP_HOSTS": "themedia", "DOCKER_MCP_THEMEDIA_SSH": "theadmin@themedia", "DOCKER_MCP_THEMEDIA_SSH_KEY": "/k/old"})
+    old = sv._hosts()["themedia"]
+    check("old per-host config still works", old["ssh"] == "theadmin@themedia" and old["key"] == "/k/old" and old["stacks"] == "/opt/stacks", old)
+    for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
+        del os.environ[k]
+    os.environ.update(keep)
+
 
 async def main():
     unit_tests()
