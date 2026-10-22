@@ -385,6 +385,11 @@ def unit_tests():
     check("names are optional", list(sv._hosts()) == ["172.16.20.50", "172.16.20.40", "172.16.20.11"], list(sv._hosts()))
     for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
         del os.environ[k]
+    os.environ.update({"DOCKER_MCP_HOSTS_NAME": "172.16.20.50=themedia,172.16.20.40=thedmz", "DOCKER_MCP_SSH_USER": "theadmin"})
+    po = sv._hosts()
+    check("pairs alone are enough (no DOCKER_MCP_HOSTS)", list(po) == ["themedia", "thedmz"] and po["thedmz"]["ssh"] == "theadmin@172.16.20.40", po)
+    for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
+        del os.environ[k]
     os.environ.update(keep)
 
 

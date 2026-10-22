@@ -79,7 +79,7 @@ Destructive (needs `confirm=true` and a typed phrase):
 Set in the `env` part of the Claude config.
 
 - `DOCKER_MCP_HOSTS`: hosts, comma separated. Each one is a name or an IP address. If empty, one host called `local` uses docker on the same machine.
-- `DOCKER_MCP_HOSTS_NAME`: friendly names for the hosts, so you can say "themedia" and Claude knows the IP. Optional. Two ways (a blank slot, like `themedia,,thedmz`, skips a host):
+- `DOCKER_MCP_HOSTS_NAME`: (easiest: just this one, as `ip=name` pairs, and `DOCKER_MCP_HOSTS` can be left out) friendly names for the hosts, so you can say "themedia" and Claude knows the IP. Optional. Two ways (a blank slot, like `themedia,,thedmz`, skips a host):
   - a list in the same order: `DOCKER_MCP_HOSTS=172.16.20.50,172.16.20.40` and `DOCKER_MCP_HOSTS_NAME=themedia,thedmz`
   - pairs: `DOCKER_MCP_HOSTS_NAME=172.16.20.50=themedia,172.16.20.40=thedmz`
 

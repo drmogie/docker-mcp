@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docker-mcp"
-version = "2026.10.22.01"
+version = "2026.10.22.02"
 description = "MCP tool that lets Claude look at and manage Docker containers, images, volumes, networks and Compose stacks, over SSH."
 readme = "README.md"
 requires-python = ">=3.10"

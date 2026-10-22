@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.10.22.02
+
+- Fix: `DOCKER_MCP_HOSTS_NAME` with `ip=name` pairs now works on its own. In `.01` the setting `DOCKER_MCP_HOSTS` was still needed.
+
 ## 2026.10.22.01
 
 - Files on the host: `docker_file_list`, `docker_file_read`, `docker_file_write`, `docker_file_edit`, `docker_file_mkdir`, `docker_file_move`, `docker_file_delete`. They only work inside the stacks folder and folders listed in `DOCKER_MCP_FILE_ROOTS`. Symlinks and `..` cannot escape.

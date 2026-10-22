@@ -78,7 +78,7 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
-__version__ = "2026.10.22.01"
+__version__ = "2026.10.22.02"
 
 mcp = FastMCP("docker")
 
@@ -151,6 +151,9 @@ def _truthy(v: str | None) -> bool:
 
 def _hosts() -> dict[str, dict[str, Any]]:
     entries = [n.strip() for n in os.environ.get("DOCKER_MCP_HOSTS", "").split(",") if n.strip()]
+    if not entries:
+        # Only DOCKER_MCP_HOSTS_NAME with ip=name pairs: those pairs are the host list.
+        entries = [x.partition("=")[0].strip() for x in os.environ.get("DOCKER_MCP_HOSTS_NAME", "").split(",") if "=" in x and x.partition("=")[0].strip()]
     if not entries:
         entries = ["local"]
     # Friendly names. DOCKER_MCP_HOSTS_NAME is either a list in the same order as
