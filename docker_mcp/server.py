@@ -9,8 +9,16 @@ over SSH with a key (never a password). For the machine it runs on, it runs
 
 Settings come from environment variables only.
 
-  DOCKER_MCP_HOSTS      names of your hosts, comma separated, for example "themedia"
+  DOCKER_MCP_HOSTS      your hosts, comma separated. Each is a name or an IP address,
+                        for example "themedia" or "172.16.20.50"
                         (if left empty, one host called "local" is used)
+  DOCKER_MCP_HOSTS_NAME friendly names for those hosts, so you can say "themedia" and
+                        Claude knows the IP. Either a list in the same order,
+                        "themedia,thedmz"
+                        (leave a slot empty to skip a host: "themedia,,thedmz"), or pairs, "172.16.20.50=themedia,172.16.20.40=thedmz".
+                        The IP is still what SSH connects to. Claude can use the name or
+                        the IP. The <NAME> in the settings below can be the friendly
+                        name or the IP.
 
 For each host name (letters, digits; other characters become "_", upper case):
 
@@ -29,6 +37,14 @@ Shared settings (used by every host that does not set its own):
   DOCKER_MCP_SUDO         "true" to use `sudo -n` on all hosts
   DOCKER_MCP_STACKS       Compose stacks folder for all hosts
   A host's own <NAME> setting always wins over the shared one.
+
+File settings (for the file, copy, build and run tools):
+
+  DOCKER_MCP_FILE_ROOTS   extra folders on the host the file tools may touch, comma
+                          separated. The stacks folder is always allowed.
+  DOCKER_MCP_<NAME>_FILE_ROOTS  the same, for one host
+  DOCKER_MCP_MAX_FILE_KB  biggest file to read or write, in KB (default 1024)
+  DOCKER_MCP_BUILD_TIMEOUT  seconds for docker build (default 1800)
 
 Other settings:
 
@@ -49,8 +65,11 @@ The .env files are never read.
 
 from __future__ import annotations
 
+import base64
+import ipaddress
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -59,7 +78,7 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
-__version__ = "2026.10.20.01"
+__version__ = "2026.10.22.01"
 
 mcp = FastMCP("docker")
 
@@ -131,9 +150,14 @@ def _truthy(v: str | None) -> bool:
 
 
 def _hosts() -> dict[str, dict[str, Any]]:
-    names = [n.strip() for n in os.environ.get("DOCKER_MCP_HOSTS", "").split(",") if n.strip()]
-    if not names:
-        names = ["local"]
+    entries = [n.strip() for n in os.environ.get("DOCKER_MCP_HOSTS", "").split(",") if n.strip()]
+    if not entries:
+        entries = ["local"]
+    # Friendly names. DOCKER_MCP_HOSTS_NAME is either a list in the same order as
+    # DOCKER_MCP_HOSTS ("themedia,thedmz") or pairs ("172.16.20.50=themedia,...").
+    raw_names = [n.strip() for n in os.environ.get("DOCKER_MCP_HOSTS_NAME", "").split(",")]
+    pairs = {k.strip(): v.strip() for k, _, v in (x.partition("=") for x in raw_names if "=" in x) if k.strip() and v.strip()}
+    plain = [x for x in raw_names if "=" not in x]
     # Shared defaults, used by every host that does not set its own value.
     d_user = os.environ.get("DOCKER_MCP_SSH_USER", "").strip()
     d_port = os.environ.get("DOCKER_MCP_SSH_PORT", "").strip()
@@ -141,19 +165,30 @@ def _hosts() -> dict[str, dict[str, Any]]:
     d_sudo = os.environ.get("DOCKER_MCP_SUDO")
     d_stacks = os.environ.get("DOCKER_MCP_STACKS", "").strip()
     hosts: dict[str, dict[str, Any]] = {}
-    for n in names:
-        p = f"DOCKER_MCP_{_env_key(n)}_"
-        ssh = os.environ.get(p + "SSH", "").strip()
-        if not ssh and d_user and n.lower() != "local":
-            # Shared user: the host name is also the address.
-            ssh = f"{d_user}@{n}"
-        sudo_raw = os.environ.get(p + "SUDO")
-        stacks = os.environ.get(p + "STACKS", "").strip() or d_stacks or "/opt/stacks"
-        hosts[n] = {
-            "name": n,
+    for i, addr in enumerate(entries):
+        name = pairs.get(addr) or (plain[i] if i < len(plain) and not pairs else "") or addr  # a blank slot means no name
+        if name in hosts:
+            name = addr  # two hosts with the same friendly name: keep them apart
+        prefixes = [f"DOCKER_MCP_{_env_key(name)}_", f"DOCKER_MCP_{_env_key(addr)}_"]
+
+        def get(suffix: str) -> str | None:
+            for pre in prefixes:
+                if pre + suffix in os.environ:
+                    return os.environ[pre + suffix]
+            return None
+
+        ssh = (get("SSH") or "").strip()
+        if not ssh and d_user and addr.lower() != "local":
+            # Shared user: the host entry is the address (name or IP).
+            ssh = f"{d_user}@{addr}"
+        sudo_raw = get("SUDO")
+        stacks = (get("STACKS") or "").strip() or d_stacks or "/opt/stacks"
+        hosts[name] = {
+            "name": name,
+            "address": addr,
             "ssh": ssh,
-            "port": os.environ.get(p + "SSH_PORT", "").strip() or d_port,
-            "key": os.environ.get(p + "SSH_KEY", "").strip() or d_key,
+            "port": (get("SSH_PORT") or "").strip() or d_port,
+            "key": (get("SSH_KEY") or "").strip() or d_key,
             "sudo": _truthy(sudo_raw if sudo_raw is not None else d_sudo),
             "stacks": stacks.rstrip("/") or "/",
         }
@@ -162,16 +197,24 @@ def _hosts() -> dict[str, dict[str, Any]]:
 
 def _pick(host: str) -> tuple[dict[str, Any] | None, str]:
     hs = _hosts()
+    listing = ", ".join(f"{h['name']} ({h['address']})" if h["name"] != h["address"] else h["name"] for h in hs.values())
     if not host:
         if len(hs) == 1:
             return next(iter(hs.values())), ""
-        return None, "Which host? Choose one of: " + ", ".join(hs)
-    if host not in hs:
-        return None, f"Unknown host '{host}'. Choose one of: " + ", ".join(hs)
-    return hs[host], ""
+        return None, "Which host? Choose one of: " + listing
+    want = host.strip().lower()
+    for h in hs.values():  # friendly name first, then the address
+        if h["name"].lower() == want:
+            return h, ""
+    for h in hs.values():
+        if h["address"].lower() == want:
+            return h, ""
+    return None, f"Unknown host '{host}'. Choose one of: " + listing
 
 
-def _timeout(long: bool = False) -> int:
+def _timeout(long: bool | str = False) -> int:
+    if long == "build":
+        return int(os.environ.get("DOCKER_MCP_BUILD_TIMEOUT", "1800"))
     if long:
         return int(os.environ.get("DOCKER_MCP_LONG_TIMEOUT", "900"))
     return int(os.environ.get("DOCKER_MCP_TIMEOUT", "60"))
@@ -193,20 +236,26 @@ def _ssh_cmd(h: dict[str, Any], argv: list[str], cwd: str | None = None) -> list
     return cmd + ["--", h["ssh"], remote]
 
 
-def _exec(h: dict[str, Any], argv: list[str], cwd: str | None = None,
-          timeout: int | None = None) -> tuple[int, str, str]:
-    """Run a command on the host. Returns (exit code, stdout, stderr)."""
+def _build(h: dict[str, Any], argv: list[str], cwd: str | None) -> tuple[list[str], dict[str, Any]]:
+    """Turn argv into the real command (ssh, sudo, or local docker binary)."""
     argv = list(argv)
     if h["sudo"] and argv and argv[0] == "docker":
         argv = ["sudo", "-n"] + argv
+    if h["ssh"]:
+        return _ssh_cmd(h, argv, cwd), {}
+    docker_bin = os.environ.get("DOCKER_MCP_DOCKER_BIN", "docker")
+    if argv and argv[0] == "docker":
+        argv[0] = docker_bin
+    elif len(argv) > 2 and argv[0] == "sudo" and argv[2] == "docker":
+        argv[2] = docker_bin
+    return argv, {"cwd": cwd}
+
+
+def _exec(h: dict[str, Any], argv: list[str], cwd: str | None = None,
+          timeout: int | None = None) -> tuple[int, str, str]:
+    """Run a command on the host. Returns (exit code, stdout, stderr)."""
     try:
-        if h["ssh"]:
-            cmd, kw = _ssh_cmd(h, argv, cwd), {}
-        else:
-            if "docker" in argv:
-                i = argv.index("docker")
-                argv[i] = os.environ.get("DOCKER_MCP_DOCKER_BIN", "docker")
-            cmd, kw = argv, {"cwd": cwd}
+        cmd, kw = _build(h, argv, cwd)
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout or _timeout(),
                            stdin=subprocess.DEVNULL, errors="replace", **kw)
         return p.returncode, p.stdout, p.stderr
@@ -216,8 +265,25 @@ def _exec(h: dict[str, Any], argv: list[str], cwd: str | None = None,
         return 127, "", str(e)
 
 
+def _exec_bytes(h: dict[str, Any], argv: list[str], cwd: str | None = None,
+                timeout: int | None = None, data: bytes | None = None) -> tuple[int, bytes, str]:
+    """Like _exec, but exact bytes in and out (no newline changes). Used for files."""
+    try:
+        cmd, kw = _build(h, argv, cwd)
+        if data is None:
+            kw["stdin"] = subprocess.DEVNULL
+        else:
+            kw["input"] = data
+        p = subprocess.run(cmd, capture_output=True, timeout=timeout or _timeout(), **kw)
+        return p.returncode, p.stdout, p.stderr.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        return 124, b"", "Timed out waiting for the command."
+    except (OSError, ValueError) as e:
+        return 127, b"", str(e)
+
+
 def _docker(h: dict[str, Any], args: list[str], cwd: str | None = None,
-            long: bool = False) -> tuple[int, str, str]:
+            long: bool | str = False) -> tuple[int, str, str]:
     return _exec(h, ["docker"] + args, cwd=cwd, timeout=_timeout(long))
 
 
@@ -353,7 +419,7 @@ def docker_hosts() -> str:
     for h in _hosts().values():
         rc, out, err = _docker(h, ["version", "--format", "{{.Server.Version}}"])
         row: dict[str, Any] = {
-            "host": h["name"], "via": f"ssh {h['ssh']}" if h["ssh"] else "local docker",
+            "host": h["name"], "address": h["address"], "via": f"ssh {h['ssh']}" if h["ssh"] else "local docker",
             "sudo": h["sudo"], "stacks_folder": h["stacks"],
         }
         if rc == 0:
@@ -675,7 +741,9 @@ def docker_stack_action(stack: str, action: str, host: str = "",
     """Run a Compose action on one stack.
 
     action: up (create/start, same as docker compose up -d), pull (get new images),
-    update (pull then up), start, stop, restart.
+    update (pull then up), start, stop, restart, build (build the images the
+    compose file builds itself), build_no_cache, up_build (build then up),
+    recreate (up with --force-recreate).
     These need confirm=true.
     down (removes the containers and network, keeps volumes) and
     down_volumes (also removes the stack's volumes) are destructive and also
@@ -691,6 +759,10 @@ def docker_stack_action(stack: str, action: str, host: str = "",
         "start": [["compose", "start"]],
         "stop": [["compose", "stop"]],
         "restart": [["compose", "restart"]],
+        "build": [["compose", "build"]],
+        "build_no_cache": [["compose", "build", "--no-cache"]],
+        "up_build": [["compose", "up", "-d", "--build"]],
+        "recreate": [["compose", "up", "-d", "--force-recreate"]],
         "down": [["compose", "down"]],
         "down_volumes": [["compose", "down", "--volumes"]],
     }
@@ -705,7 +777,7 @@ def docker_stack_action(stack: str, action: str, host: str = "",
         return stop
     log = []
     for cmd in plans[action]:
-        rc, out, er = _docker(h, cmd, cwd=st[0], long=True)
+        rc, out, er = _docker(h, cmd, cwd=st[0], long="build" if "build" in action else True)
         text = _redact_text((out + er).strip())[-3000:]
         if rc:
             return _fail(rc, er, out)
@@ -783,13 +855,16 @@ def docker_prune(what: str, host: str = "", confirm: bool = False, confirm_phras
 
 @mcp.tool()
 @_safe
-def docker_exec(container: str, command: str, host: str = "",
+def docker_exec(container: str, command: str, host: str = "", shell: bool = False,
+                workdir: str = "", user: str = "",
                 confirm: bool = False, confirm_phrase: str = "") -> str:
     """Run one command inside a running container (no terminal, no input).
 
     Destructive, because the command can do anything inside the container.
     Needs confirm=true and confirm_phrase "<host> exec <container>".
-    command is split like a shell would, but no shell is used (no pipes).
+    By default the command is split like a shell would, but no shell is used
+    (no pipes). Set shell=true to run it with `sh -c` (pipes, &&, redirects).
+    workdir sets the folder inside the container. user sets the user.
     """
     h, err = _pick(host)
     if not h:
@@ -798,16 +873,753 @@ def docker_exec(container: str, command: str, host: str = "",
     if bad:
         return bad
     try:
-        parts = shlex.split(command)
+        parts = ["sh", "-c", command] if shell else shlex.split(command)
     except ValueError as e:
         return f"Bad command: {e}"
-    if not parts:
+    if not command.strip() or not parts:
         return "command is empty."
+    opts: list[str] = []
+    if workdir:
+        if not _container_path_ok(workdir):
+            return f"Bad workdir: {workdir!r}"
+        opts += ["-w", workdir]
+    if user:
+        if not re.match(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63})?$", user):
+            return f"Bad user: {user!r}"
+        opts += ["-u", user]
     stop = _gate(h, "destructive", f"exec {container}", f"{command}", confirm, confirm_phrase)
     if stop:
         return stop
-    rc, out, e = _docker(h, ["exec", container] + parts)
+    rc, out, e = _docker(h, ["exec"] + opts + [container] + parts)
     text = _redact_text((out + e).strip())[-8000:]
+    return f"ERROR (exit {rc}): {text}" if rc else (text or "(no output)")
+
+
+# ---------------------------------------------------------------------------
+# Files on the host (stacks folder and any extra allowed folders)
+# ---------------------------------------------------------------------------
+SECRET_FILE_RE = re.compile(
+    r"(^\.env|\.env$|\.(pem|key|p12|pfx|kdbx)$|^id_(rsa|dsa|ecdsa|ed25519)$|^authorized_keys$"
+    r"|^shadow$|^\.htpasswd$|credentials?$|^\.git-credentials$)", re.I)
+PORT_RE = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}:)?\d{1,5}(-\d{1,5})?:\d{1,5}(-\d{1,5})?(/(tcp|udp))?$")
+KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+MODE_RE = re.compile(r"^[0-7]{3,4}$")
+GIT_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+/[A-Za-z0-9._~%/-]+(#[A-Za-z0-9._/:-]+)?$")
+RESTART_RE = re.compile(r"^(no|always|unless-stopped|on-failure(:\d{1,3})?)$")
+HIDDEN_MSG = (
+    "Refusing: the text contains ***hidden*** (a hidden secret). Writing it would "
+    "destroy the real value. Use docker_file_edit on the other lines, or use ${VAR} references."
+)
+
+
+def _max_bytes() -> int:
+    return int(os.environ.get("DOCKER_MCP_MAX_FILE_KB", "1024")) * 1024
+
+
+def _roots(h: dict[str, Any]) -> list[str]:
+    raw = os.environ.get(f"DOCKER_MCP_{_env_key(h['name'])}_FILE_ROOTS")
+    if raw is None:
+        raw = os.environ.get("DOCKER_MCP_FILE_ROOTS", "")
+    roots = [h["stacks"]]
+    for x in raw.split(","):
+        x = x.strip()
+        if x.startswith("/"):
+            x = posixpath.normpath(x)
+            if x != "/" and x not in roots:
+                roots.append(x)
+    return roots
+
+
+def _under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def _path(h: dict[str, Any], raw: str) -> tuple[str | None, str]:
+    """Check a host path. It must be inside an allowed folder, also after symlinks."""
+    raw = (raw or "").strip()
+    if not raw or any(c in raw for c in "\0\n\r"):
+        return None, f"Bad path: {raw!r}"
+    if not raw.startswith("/"):
+        raw = h["stacks"] + "/" + raw  # relative paths start in the stacks folder
+    p = posixpath.normpath(raw)
+    if p.startswith("//"):
+        p = "/" + p.lstrip("/")
+    roots = _roots(h)
+    if not any(_under(p, r) for r in roots):
+        return None, (f"Path {p} is outside the allowed folders: {', '.join(roots)}. "
+                      "More can be allowed with DOCKER_MCP_FILE_ROOTS.")
+    rc, out, err = _exec(h, ["realpath", "-m", "--"] + roots + [p])
+    if rc != 0:
+        return None, _fail(rc, err)
+    lines = out.splitlines()
+    if len(lines) != len(roots) + 1:
+        return None, "Could not check the path."
+    if not any(_under(lines[-1], r) for r in lines[:-1]):
+        return None, f"Path {p} leads outside the allowed folders (symlink). Refused."
+    return p, ""
+
+
+def _secret_file(p: str) -> bool:
+    return bool(SECRET_FILE_RE.search(posixpath.basename(p)))
+
+
+def _container_path_ok(p: str) -> bool:
+    return (bool(p) and p.startswith("/") and len(p) < 1024 and not any(c in p for c in "\0\n\r")
+            and ".." not in p.split("/"))
+
+
+def _exists(h: dict[str, Any], p: str, flag: str = "-e") -> bool:
+    rc, _, _ = _exec(h, ["test", flag, p])
+    return rc == 0
+
+
+WRITE_SCRIPT = r'''set -e
+f="$1"; mode="$2"; bak="$3"; mk="$4"
+d=$(dirname -- "$f")
+if [ "$mk" = 1 ]; then mkdir -p -- "$d"; fi
+if [ ! -d "$d" ]; then echo "folder does not exist: $d" >&2; exit 3; fi
+if [ -d "$f" ]; then echo "that path is a folder: $f" >&2; exit 3; fi
+t="$f.mcp-tmp.$$"
+trap 'rm -f -- "$t"' EXIT
+cat > "$t"
+if [ -e "$f" ]; then
+  if [ "$bak" = 1 ]; then cp -p -- "$f" "$f.bak"; fi
+  chmod --reference="$f" -- "$t" 2>/dev/null || true
+  chown --reference="$f" -- "$t" 2>/dev/null || true
+fi
+if [ -n "$mode" ]; then chmod "$mode" -- "$t"; fi
+mv -f -- "$t" "$f"
+trap - EXIT
+'''
+
+
+def _write_file(h: dict[str, Any], p: str, data: bytes, make_dirs: bool = True,
+                backup: bool = True, mode: str = "") -> tuple[int, str]:
+    rc, _, err = _exec_bytes(
+        h, ["sh", "-c", WRITE_SCRIPT, "sh", p, mode, "1" if backup else "0", "1" if make_dirs else "0"],
+        data=data)
+    return rc, err
+
+
+def _read_file(h: dict[str, Any], p: str, limit: int) -> tuple[bytes | None, str, bool]:
+    """Return (bytes, error, cut). Reads at most limit bytes; cut=true if the file is longer."""
+    rc, out, err = _exec_bytes(h, ["head", "-c", str(limit + 1), "--", p])
+    if rc != 0:
+        return None, _fail(rc, err), False
+    return out[:limit], "", len(out) > limit
+
+
+def _as_text(data: bytes) -> str | None:
+    if b"\0" in data:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+@mcp.tool()
+@_safe
+def docker_file_list(path: str = "", host: str = "", depth: int = 1) -> str:
+    """List files and folders on the Docker host (type, mode, owner, size, date, path).
+
+    Only the stacks folder and folders allowed with DOCKER_MCP_FILE_ROOTS can be used.
+    An empty path means the stacks folder. A path without a leading / starts there too.
+    depth is how many folder levels to show (1 to 4).
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    p, e = _path(h, path or h["stacks"])
+    if not p:
+        return e
+    depth = max(1, min(int(depth), 4))
+    rc, out, er = _exec(h, ["find", p, "-maxdepth", str(depth), "-printf", "%y %m %u:%g %s %TY-%Tm-%Td_%TH:%TM %p\\n"])
+    if rc != 0 and not out.strip():
+        return _fail(rc, er)
+    lines = sorted(out.splitlines(), key=lambda x: x.split(" ", 5)[-1])
+    cut = f"\n... showing 500 of {len(lines)}" if len(lines) > 500 else ""
+    return "\n".join(lines[:500]) + cut
+
+
+@mcp.tool()
+@_safe
+def docker_file_read(path: str, host: str = "") -> str:
+    """Read a text file on the Docker host. Secret values are hidden.
+
+    Files that hold secrets (.env, *.env, keys, credentials) are never shown.
+    Big files are cut (DOCKER_MCP_MAX_FILE_KB, default 1024 KB).
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    p, e = _path(h, path)
+    if not p:
+        return e
+    if _secret_file(p):
+        return f"Refusing to show {posixpath.basename(p)}: it holds secrets. You can still write or edit it."
+    data, e, cut = _read_file(h, p, _max_bytes())
+    if data is None:
+        return e
+    text = _as_text(data)
+    if text is None:
+        return "That file is not UTF-8 text (binary). Not shown."
+    shown = _redact_text(text)
+    note = "\n[note: secret values were hidden]" if shown != text.rstrip("\n") and HIDDEN in shown else ""
+    return shown + ("\n... file cut here" if cut else "") + note
+
+
+@mcp.tool()
+@_safe
+def docker_file_write(path: str, content: str, host: str = "", make_dirs: bool = True,
+                      backup: bool = True, mode: str = "", encoding: str = "text",
+                      confirm: bool = False) -> str:
+    """Create a file, or replace a whole file, on the Docker host. Needs confirm=true.
+
+    make_dirs creates missing folders. backup keeps the old file as <name>.bak.
+    mode is an optional octal mode such as 644 or 755 (for scripts). An existing
+    file keeps its mode and owner. encoding is text, or base64 for binary files.
+    For a small change to an existing file use docker_file_edit instead: it never
+    touches hidden secret lines.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    p, e = _path(h, path)
+    if not p:
+        return e
+    if encoding not in ("text", "base64"):
+        return "encoding must be text or base64."
+    if mode and not MODE_RE.match(mode):
+        return "mode must be octal like 644 or 755."
+    if HIDDEN in content:
+        return HIDDEN_MSG
+    try:
+        data = base64.b64decode(content, validate=True) if encoding == "base64" else content.encode("utf-8")
+    except ValueError:
+        return "content is not valid base64."
+    if len(data) > _max_bytes():
+        return f"Too big ({len(data)} bytes). Limit is {_max_bytes()} (DOCKER_MCP_MAX_FILE_KB)."
+    exists = _exists(h, p)
+    stop = _gate(h, "change", f"write file {p}",
+                 f"{'replace' if exists else 'create'} {p} ({len(data)} bytes)"
+                 + (f"; old file kept as {p}.bak" if exists and backup else ""), confirm, "")
+    if stop:
+        return stop
+    rc, er = _write_file(h, p, data, make_dirs, backup, mode)
+    if rc:
+        return _fail(rc, er)
+    return f"Done: wrote {len(data)} bytes to {p}" + (f" (old file kept as {p}.bak)" if exists and backup else "")
+
+
+@mcp.tool()
+@_safe
+def docker_file_edit(path: str, old_string: str, new_string: str, host: str = "",
+                     replace_all: bool = False, backup: bool = True, confirm: bool = False) -> str:
+    """Change part of a text file: replace old_string with new_string. Needs confirm=true.
+
+    old_string must match the file exactly and must be unique, unless replace_all=true.
+    Works on files Claude can read. Lines with hidden secrets cannot be matched.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    p, e = _path(h, path)
+    if not p:
+        return e
+    if _secret_file(p):
+        return f"Refusing to edit {posixpath.basename(p)}: it holds secrets. Use docker_file_write for the whole file."
+    if HIDDEN in old_string or HIDDEN in new_string:
+        return HIDDEN_MSG
+    if not old_string:
+        return "old_string is empty. Use docker_file_write to create a file."
+    if old_string == new_string:
+        return "old_string and new_string are the same. Nothing to do."
+    data, e, cut = _read_file(h, p, _max_bytes())
+    if data is None:
+        return e
+    if cut:
+        return "File is too big to edit this way."
+    text = _as_text(data)
+    if text is None:
+        return "That file is not UTF-8 text. Cannot edit."
+    n = text.count(old_string)
+    if n == 0:
+        hint = " The file uses Windows line endings (\\r\\n)." if "\r\n" in text and "\r\n" not in old_string else ""
+        return f"old_string was not found.{hint} Read the file again and copy the text exactly."
+    if n > 1 and not replace_all:
+        return f"old_string was found {n} times. Add more text around it to make it unique, or set replace_all=true."
+    new_text = text.replace(old_string, new_string) if replace_all else text.replace(old_string, new_string, 1)
+    stop = _gate(h, "change", f"edit file {p}",
+                 f"replace {n if replace_all else 1} place(s) in {p}: {_redact_text(old_string)[:200]!r} -> {_redact_text(new_string)[:200]!r}",
+                 confirm, "")
+    if stop:
+        return stop
+    rc, er = _write_file(h, p, new_text.encode("utf-8"), False, backup)
+    if rc:
+        return _fail(rc, er)
+    return f"Done: changed {n if replace_all else 1} place(s) in {p}" + (f" (old file kept as {p}.bak)" if backup else "")
+
+
+@mcp.tool()
+@_safe
+def docker_file_mkdir(path: str, host: str = "", confirm: bool = False) -> str:
+    """Make a folder (and missing parent folders) on the Docker host. Needs confirm=true."""
+    h, err = _pick(host)
+    if not h:
+        return err
+    p, e = _path(h, path)
+    if not p:
+        return e
+    stop = _gate(h, "change", f"mkdir {p}", f"mkdir -p {p}", confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _exec(h, ["mkdir", "-p", "--", p])
+    return _fail(rc, er, out) if rc else f"Done: folder {p} exists"
+
+
+@mcp.tool()
+@_safe
+def docker_file_move(source: str, destination: str, host: str = "", overwrite: bool = False,
+                     confirm: bool = False) -> str:
+    """Move or rename a file or folder on the Docker host. Needs confirm=true.
+
+    Without overwrite=true an existing destination is left alone.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    s_, e = _path(h, source)
+    if not s_:
+        return e
+    d_, e = _path(h, destination)
+    if not d_:
+        return e
+    if s_ in _roots(h):
+        return "Refusing to move an allowed root folder."
+    stop = _gate(h, "change", f"move {s_}", f"mv {s_} -> {d_}" + (" (overwrite)" if overwrite else ""), confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _exec(h, ["mv", "-f" if overwrite else "-n", "--", s_, d_])
+    return _fail(rc, er, out) if rc else f"Done: moved {s_} to {d_}"
+
+
+@mcp.tool()
+@_safe
+def docker_file_delete(path: str, host: str = "", recursive: bool = False,
+                       confirm: bool = False, confirm_phrase: str = "") -> str:
+    """Delete a file or an empty folder on the Docker host. Destructive.
+
+    Needs confirm=true and confirm_phrase "<host> delete <path>".
+    recursive=true also deletes a folder with everything in it. Never forced.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    p, e = _path(h, path)
+    if not p:
+        return e
+    if p in _roots(h):
+        return "Refusing to delete an allowed root folder."
+    stop = _gate(h, "destructive", f"delete {p}", f"{'rm -r' if recursive else 'rm'} {p}", confirm, confirm_phrase)
+    if stop:
+        return stop
+    if recursive:
+        argv = ["rm", "-r", "--", p]
+    else:
+        argv = ["sh", "-c", 'if [ -d "$1" ] && [ ! -L "$1" ]; then rmdir -- "$1"; else rm -- "$1"; fi', "sh", p]
+    rc, out, er = _exec(h, argv)
+    return _fail(rc, er, out) if rc else f"Done: deleted {p}"
+
+
+@mcp.tool()
+@_safe
+def docker_copy(container: str, container_path: str, host_path: str, direction: str,
+                host: str = "", keep_owner: bool = False, confirm: bool = False) -> str:
+    """Copy files between a container and the Docker host (docker cp). Needs confirm=true.
+
+    direction: to_container (host_path -> container_path) or from_container
+    (container_path -> host_path). host_path must be in an allowed folder.
+    Existing files at the destination are overwritten. keep_owner uses docker cp -a.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    if direction not in ("to_container", "from_container"):
+        return "direction must be to_container or from_container."
+    bad = _check_name("container", container)
+    if bad:
+        return bad
+    if not _container_path_ok(container_path):
+        return f"Bad container_path: {container_path!r}. Use an absolute path without '..'."
+    hp, e = _path(h, host_path)
+    if not hp:
+        return e
+    remote = f"{container}:{container_path}"
+    src, dst = (hp, remote) if direction == "to_container" else (remote, hp)
+    stop = _gate(h, "change", f"copy {direction} {container}", f"docker cp {src} {dst}", confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _docker(h, ["cp"] + (["-a"] if keep_owner else []) + [src, dst], long=True)
+    return _fail(rc, er, out) if rc else f"Done: copied {src} to {dst}"
+
+
+# ---------------------------------------------------------------------------
+# Stack files, build, run, create
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@_safe
+def docker_stack_write(stack: str, content: str, host: str = "", confirm: bool = False) -> str:
+    """Create a new stack, or replace the compose file of one, then check it. Needs confirm=true.
+
+    The file goes to <stacks folder>/<stack>/compose.yaml (an existing compose file keeps its name).
+    The result is checked with `docker compose config`. If the check fails, the old file is put back
+    (or the new file removed) and the error is shown. Nothing is started: use docker_stack_action up.
+    Secret values should be ${VARIABLES} that live in the .env file (write that with docker_file_write).
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    bad = _check_name("stack", stack)
+    if bad:
+        return bad
+    if HIDDEN in content:
+        return HIDDEN_MSG
+    data = content.encode("utf-8")
+    if len(data) > _max_bytes():
+        return f"Too big ({len(data)} bytes)."
+    stacks, e = _find_stacks(h)
+    if stacks is None:
+        return e
+    target = stacks.get(stack) or f"{h['stacks']}/{stack}/compose.yaml"
+    p, e = _path(h, target)
+    if not p:
+        return e
+    existed = stack in stacks
+    stop = _gate(h, "change", f"write stack {stack}",
+                 f"{'replace' if existed else 'create'} {p} ({len(data)} bytes), then check it", confirm, "")
+    if stop:
+        return stop
+    rc, er = _write_file(h, p, data, True, True)
+    if rc:
+        return _fail(rc, er)
+    folder = p.rsplit("/", 1)[0]
+    rc, out, er = _docker(h, ["compose", "config", "-q"], cwd=folder)
+    if rc:
+        if existed:
+            _exec(h, ["mv", "-f", "--", p + ".bak", p])
+        else:
+            _exec(h, ["rm", "-f", "--", p])
+        return "The compose file did not pass the check, so the " + (
+            "old file was put back." if existed else "new file was removed.") + "\n" + _fail(rc, er, out)
+    return f"Done: {p} written and checked ({'replaced' if existed else 'new stack'}). Not started yet."
+
+
+@mcp.tool()
+@_safe
+def docker_stack_logs(stack: str, host: str = "", service: str = "", tail: int = 100, since: str = "") -> str:
+    """Show the last log lines of a whole stack, or one service of it. since like 10m, 2h, 2026-10-22."""
+    h, err = _pick(host)
+    if not h:
+        return err
+    st, e = _stack(h, stack)
+    if not st:
+        return e
+    args = ["compose", "logs", "--no-color", "--timestamps", "--tail", str(max(1, min(int(tail), 1000)))]
+    if since:
+        if not SINCE_RE.match(since):
+            return f"Bad since value: {since!r}."
+        args += ["--since", since]
+    if service:
+        bad = _check_name("service", service)
+        if bad:
+            return bad
+        args.append(service)
+    rc, out, er = _docker(h, args, cwd=st[0])
+    if rc:
+        return _fail(rc, er, out)
+    text = _redact_text((out + er).strip())
+    return text[-30000:] if text else "(no log lines)"
+
+
+@mcp.tool()
+@_safe
+def docker_build(context: str, tag: str, host: str = "", dockerfile: str = "",
+                 build_args: dict[str, str] | None = None, target: str = "", platform: str = "",
+                 no_cache: bool = False, pull: bool = False, confirm: bool = False) -> str:
+    """Build an image with docker build. Needs confirm=true.
+
+    context is a folder on the host (in an allowed folder) or an https git URL
+    such as https://github.com/drmogie/repo.git#main. tag is the image name,
+    for example myapp:latest. dockerfile is a path inside the context.
+    Build args are visible in the image history: do not put real secrets in them.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    bad = _check_name("image", tag, image=True)
+    if bad:
+        return bad
+    if GIT_URL_RE.match(context):
+        ctx = context
+    elif "://" in context or context.startswith(("git@", "-")):
+        return "Bad context: use a folder on the host or an https git URL."
+    else:
+        ctx, e = _path(h, context)
+        if not ctx:
+            return e
+    args = ["build", "--progress=plain", "-t", tag]
+    if dockerfile:
+        if not re.match(r"^[A-Za-z0-9._][A-Za-z0-9._/-]*$", dockerfile) or ".." in dockerfile.split("/"):
+            return f"Bad dockerfile: {dockerfile!r}. Use a path inside the context."
+        args += ["-f", dockerfile if ctx.startswith("https://") else f"{ctx}/{dockerfile}"]
+    shown = []
+    for k, v in (build_args or {}).items():
+        if not KEY_RE.match(k) or "\n" in str(v):
+            return f"Bad build arg: {k!r}"
+        args += ["--build-arg", f"{k}={v}"]
+        shown.append(f"{k}={HIDDEN if _secret_name(k) else v}")
+    if target:
+        if not NAME_RE.match(target):
+            return f"Bad target: {target!r}"
+        args += ["--target", target]
+    if platform:
+        if not re.match(r"^[a-z0-9]+/[a-z0-9]+(/v[0-9]+)?$", platform):
+            return f"Bad platform: {platform!r}. Use linux/amd64 for example."
+        args += ["--platform", platform]
+    if no_cache:
+        args.append("--no-cache")
+    if pull:
+        args.append("--pull")
+    args.append(ctx)
+    stop = _gate(h, "change", f"build image {tag}", f"docker build {ctx} -> {tag}" + (f" args: {', '.join(shown)}" if shown else ""), confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _docker(h, args, long="build")
+    text = _redact_text((out + er).strip())
+    if rc:
+        return f"BUILD FAILED (exit {rc}). Last lines:\n{text[-4000:]}"
+    return f"Done: built {tag}\n{text[-1200:]}"
+
+
+@mcp.tool()
+@_safe
+def docker_tag_image(source: str, target: str, host: str = "", confirm: bool = False) -> str:
+    """Give an image a second name (docker tag). Needs confirm=true."""
+    h, err = _pick(host)
+    if not h:
+        return err
+    for v in (source, target):
+        bad = _check_name("image", v, image=True)
+        if bad:
+            return bad
+    stop = _gate(h, "change", f"tag {source}", f"docker tag {source} {target}", confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _docker(h, ["tag", source, target])
+    return _fail(rc, er, out) if rc else f"Done: {source} is now also {target}"
+
+
+@mcp.tool()
+@_safe
+def docker_run(image: str, host: str = "", name: str = "", ports: list[str] | None = None,
+               env: dict[str, str] | None = None, volumes: list[str] | None = None,
+               network: str = "", restart: str = "unless-stopped", command: str = "",
+               user: str = "", workdir: str = "", confirm: bool = False) -> str:
+    """Start a new container in the background (docker run -d). Needs confirm=true.
+
+    For anything that should stay, a compose stack (docker_stack_write) is better.
+    ports like "8080:80" or "127.0.0.1:8080:80/tcp". volumes like "myvol:/data" or
+    "/opt/stacks/app/data:/data:ro" (a host folder must be in an allowed folder).
+    Not possible here: privileged mode, devices, the docker socket.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    bad = _check_name("image", image, image=True)
+    if bad:
+        return bad
+    args = ["run", "-d"]
+    if name:
+        bad = _check_name("container", name)
+        if bad:
+            return bad
+        args += ["--name", name]
+    if not RESTART_RE.match(restart):
+        return "restart must be no, always, unless-stopped or on-failure[:N]."
+    args += ["--restart", restart]
+    if network:
+        bad = _check_name("network", network)
+        if bad:
+            return bad
+        args += ["--network", network]
+    for pt in ports or []:
+        if not PORT_RE.match(pt):
+            return f"Bad port: {pt!r}"
+        args += ["-p", pt]
+    env_list = []
+    for k, v in (env or {}).items():
+        if not KEY_RE.match(k) or "\n" in str(v):
+            return f"Bad env name: {k!r}"
+        args += ["-e", f"{k}={v}"]
+        env_list.append(f"{k}={v}")
+    for vol in volumes or []:
+        parts = vol.split(":")
+        if len(parts) not in (2, 3) or (len(parts) == 3 and parts[2] not in ("ro", "rw", "z", "Z", "ro,z", "ro,Z")):
+            return f"Bad volume: {vol!r}. Use source:target or source:target:ro"
+        src = parts[0]
+        if src.startswith("/"):
+            src, e = _path(h, src)
+            if not src:
+                return e
+        elif not NAME_RE.match(src):
+            return f"Bad volume source: {src!r}"
+        if not _container_path_ok(parts[1]):
+            return f"Bad volume target: {parts[1]!r}"
+        args += ["-v", ":".join([src] + parts[1:])]
+    if user:
+        if not re.match(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63})?$", user):
+            return f"Bad user: {user!r}"
+        args += ["-u", user]
+    if workdir:
+        if not _container_path_ok(workdir):
+            return f"Bad workdir: {workdir!r}"
+        args += ["-w", workdir]
+    try:
+        cmd_parts = shlex.split(command) if command else []
+    except ValueError as e:
+        return f"Bad command: {e}"
+    args += [image] + cmd_parts
+    details = f"docker run -d {image}" + (f" name={name}" if name else "") + f" ports={ports or []} volumes={volumes or []} env={_redact_env(env_list)} network={network or 'default'}"
+    stop = _gate(h, "change", f"run {image}", details, confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _docker(h, args, long=True)
+    return _fail(rc, er, out) if rc else f"Done: started {name or image}\nid: {out.strip()[:64]}"
+
+
+@mcp.tool()
+@_safe
+def docker_create(kind: str, name: str, host: str = "", driver: str = "", subnet: str = "",
+                  gateway: str = "", ip_range: str = "", parent: str = "", internal: bool = False,
+                  options: dict[str, str] | None = None, confirm: bool = False) -> str:
+    """Create a network or a volume. Needs confirm=true.
+
+    kind: network or volume.
+    Network: driver (bridge, macvlan ...), subnet, gateway, ip_range, parent (the host
+    interface for macvlan, for example eth0.20), internal.
+    Volume: driver (default local) and options, for example an NFS volume:
+    options {"type": "nfs", "o": "addr=172.16.1.11,nfsvers=3,hard", "device": ":/volume2/THEMEDIA"}.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    if kind not in ("network", "volume"):
+        return "kind must be network or volume."
+    bad = _check_name(kind, name)
+    if bad:
+        return bad
+    if driver and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", driver):
+        return f"Bad driver: {driver!r}"
+    args = [kind, "create"] + (["--driver", driver] if driver else [])
+    if kind == "network":
+        try:
+            if subnet:
+                ipaddress.ip_network(subnet, strict=False)
+                args += ["--subnet", subnet]
+            if ip_range:
+                ipaddress.ip_network(ip_range, strict=False)
+                args += ["--ip-range", ip_range]
+            if gateway:
+                ipaddress.ip_address(gateway)
+                args += ["--gateway", gateway]
+        except ValueError as e:
+            return f"Bad address: {e}"
+        if parent:
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,31}$", parent):
+                return f"Bad parent: {parent!r}"
+            args += ["-o", f"parent={parent}"]
+        if internal:
+            args.append("--internal")
+    flag = "-o" if kind == "network" else "--opt"
+    for k, v in (options or {}).items():
+        if not KEY_RE.match(k) or "\n" in str(v):
+            return f"Bad option: {k!r}"
+        args += [flag, f"{k}={v}"]
+    stop = _gate(h, "change", f"create {kind} {name}", "docker " + " ".join(args) + f" {name}", confirm, "")
+    if stop:
+        return stop
+    rc, out, er = _docker(h, args + [name])
+    return _fail(rc, er, out) if rc else f"Done: created {kind} {name}"
+
+
+# ---------------------------------------------------------------------------
+# Host command (like pikvm_ssh): safe reads run, the rest needs a yes
+# ---------------------------------------------------------------------------
+READ_CMDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "stat", "du", "df", "free", "uptime",
+             "pwd", "whoami", "id", "uname", "date", "hostname", "file", "ps", "ss", "lsblk", "which",
+             "echo", "sort", "uniq", "cut", "tr", "diff", "readlink", "realpath", "basename", "dirname", "ip",
+             "lsof"}
+READ_GIT = {"status", "log", "diff", "show", "branch", "remote", "rev-parse"}
+RISKY_CMDS = {"rm", "rmdir", "mv", "dd", "mkfs", "shutdown", "reboot", "poweroff", "halt", "kill", "killall",
+              "pkill", "chmod", "chown", "chattr", "passwd", "usermod", "userdel", "systemctl", "service",
+              "apt", "apt-get", "dpkg", "yum", "dnf", "pacman", "iptables", "ufw", "mount", "umount", "fdisk",
+              "parted", "crontab", "sudo", "su", "truncate", "shred", "wipefs"}
+SHELL_BAD = re.compile(r"(>|<|`|\$\(|;|&&|\|\||\n|&)")
+
+
+def _classify(command: str) -> str:
+    """read, change, destructive, or blocked. Errs on the side of asking."""
+    cmd = command.strip()
+    if not cmd or "\0" in cmd:
+        return "blocked"
+    if re.search(r"(\.env\b|id_(rsa|ed25519|ecdsa|dsa)|authorized_keys|/etc/shadow|\.pem\b|\.key\b|credentials)", cmd, re.I):
+        return "blocked"
+    if any(w in RISKY_CMDS for w in re.findall(r"[A-Za-z0-9_.+-]+", cmd)):
+        return "destructive"
+    if SHELL_BAD.search(cmd):
+        return "change"
+    for seg in cmd.split("|"):
+        parts = seg.split()
+        if not parts:
+            return "change"
+        c = parts[0].rsplit("/", 1)[-1]
+        if c == "git":
+            if len(parts) < 2 or parts[1] not in READ_GIT:
+                return "change"
+        elif c == "find":
+            if re.search(r"\s-(exec|execdir|delete|ok|fprint|fprintf)\b", seg):
+                return "change"
+        elif c not in READ_CMDS:
+            return "change"
+    return "read"
+
+
+@mcp.tool()
+@_safe
+def docker_host_ssh(command: str, host: str = "", timeout: int = 60, confirm: bool = False,
+                    confirm_phrase: str = "") -> str:
+    """Run one shell command on the Docker host itself (not inside a container).
+
+    It starts in the stacks folder. Safe read-only commands (ls, cat, head, tail, grep, find,
+    df, free, uptime, git status/log/diff, ps, ss, ip, and pipes between them) run right away.
+    Anything else needs confirm=true after the user says yes. Risky ones (rm, mv, dd, chmod,
+    chown, kill, systemctl, apt, reboot, sudo ...) also need confirm_phrase "<host> ssh <first word>".
+    Files with passwords or keys (.env, keys, credentials) are blocked.
+    For files, prefer docker_file_read, docker_file_write and docker_file_edit.
+    """
+    h, err = _pick(host)
+    if not h:
+        return err
+    tier = _classify(command)
+    if tier == "blocked":
+        return "ERROR: that command is empty or touches a file with passwords or keys. It is blocked."
+    first = command.strip().split()[0].rsplit("/", 1)[-1]
+    stop = _gate(h, tier, f"ssh {first}", command, confirm, confirm_phrase)
+    if stop:
+        return stop
+    rc, out, er = _exec(h, ["sh", "-c", command], cwd=h["stacks"], timeout=max(5, min(int(timeout), 900)))
+    text = _redact_text((out + (("\n" + er) if er.strip() else "")).strip())[-12000:]
     return f"ERROR (exit {rc}): {text}" if rc else (text or "(no output)")
 
 

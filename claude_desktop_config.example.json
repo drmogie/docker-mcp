@@ -4,7 +4,7 @@
       "command": "uvx",
       "args": ["--refresh", "--from", "git+https://github.com/drmogie/docker-mcp", "docker-mcp"],
       "env": {
-        "DOCKER_MCP_HOSTS": "themedia,thedns01,thedns02,thevault,thedmz,thedocker01,thedocker02",
+        "DOCKER_MCP_HOSTS_NAME": "172.16.20.50=themedia,172.16.20.40=thedmz,172.16.20.41=thedocker01",
         "DOCKER_MCP_SSH_USER": "theadmin",
         "DOCKER_MCP_SSH_KEY": "C:\\Users\\YOU\\.ssh\\id_ed25519",
         "DOCKER_MCP_STACKS": "/opt/stacks"

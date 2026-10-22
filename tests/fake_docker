@@ -58,6 +58,10 @@ elif a.startswith("compose ls"):
 elif a.startswith("compose ps"):
     lines({"Service": "radarr", "Name": "radarr", "Image": "lscr.io/linuxserver/radarr", "State": "running", "Health": "", "Status": "Up 1 hour",
            "Publishers": [{"PublishedPort": 7878, "TargetPort": 7878}]})
+elif a.startswith("compose config -q"):
+    if "FAIL_CONFIG" in open("compose.yaml").read():
+        print("yaml: invalid", file=sys.stderr)
+        sys.exit(1)
 elif a.startswith("compose config"):
     print("services:\n  gluetun:\n    environment:\n      OPENVPN_PASSWORD: hunter2\n      TZ: America/Los_Angeles")
 elif a.startswith("exec"):

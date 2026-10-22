@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026.10.22.01
+
+- Files on the host: `docker_file_list`, `docker_file_read`, `docker_file_write`, `docker_file_edit`, `docker_file_mkdir`, `docker_file_move`, `docker_file_delete`. They only work inside the stacks folder and folders listed in `DOCKER_MCP_FILE_ROOTS`. Symlinks and `..` cannot escape.
+- Secret files (.env, keys, credentials) are never shown or edited, but `.env` can be written. Text with a hidden secret placeholder is refused, so a real secret cannot be overwritten by mistake. Writes keep the old file as `.bak`.
+- `docker_copy`: copy files into or out of a container (docker cp).
+- `docker_build`: build an image from a host folder or an https git URL. `docker_tag_image`.
+- `docker_stack_write`: create a stack or replace its compose file, then check it. A failed check puts the old file back. `docker_stack_logs`.
+- `docker_stack_action` has new actions: build, build_no_cache, up_build, recreate.
+- `docker_run`: start a container (ports, env, volumes, network, restart). No privileged mode, devices, or docker socket.
+- `docker_create`: make a network (macvlan, subnet, gateway, parent) or a volume (NFS options).
+- `docker_host_ssh`: run one shell command on the host. Safe reads run right away, others need confirm, risky ones need a typed phrase. Same idea as `pikvm_ssh`.
+- `docker_exec` can now use `shell=true`, `workdir` and `user`.
+- New settings: `DOCKER_MCP_FILE_ROOTS`, `DOCKER_MCP_<NAME>_FILE_ROOTS`, `DOCKER_MCP_MAX_FILE_KB`, `DOCKER_MCP_BUILD_TIMEOUT`.
+- New `DOCKER_MCP_HOSTS_NAME`: friendly names for the hosts (a list in the same order as `DOCKER_MCP_HOSTS`, or `ip=name` pairs). Hosts can now be listed by IP. Names and IPs both work in every tool, and `docker_hosts` shows both. Old configs work unchanged.
+- File tools need a Linux host (they use find, head, realpath).
+
 ## 2026.10.20.01
 
 - Many hosts with one key: new shared settings DOCKER_MCP_SSH_USER, DOCKER_MCP_SSH_KEY, DOCKER_MCP_SSH_PORT, DOCKER_MCP_SUDO and DOCKER_MCP_STACKS.
