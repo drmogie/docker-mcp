@@ -4,7 +4,7 @@ Lets Claude look at and manage Docker (containers, images, volumes, networks,
 and Compose stacks) on one or more Docker hosts.
 
 How it connects: it runs the `docker` command. For a remote host it runs it
-over SSH with a key (never a password). For the machine it runs on, it runs
+over SSH with a key or a password. For the machine it runs on, it runs
 `docker` directly. Nothing is installed on the Docker host.
 
 Settings come from environment variables only.
@@ -25,7 +25,9 @@ For each host name (letters, digits; other characters become "_", upper case):
   DOCKER_MCP_<NAME>_SSH         user@address for SSH. Leave empty to use local docker.
   DOCKER_MCP_<NAME>_SSH_PORT    SSH port (default 22)
   DOCKER_MCP_<NAME>_SSH_KEY     path to the private key file to use
-  DOCKER_MCP_<NAME>_SUDO        "true" to run docker with `sudo -n` (needs passwordless sudo)
+  DOCKER_MCP_<NAME>_SSH_PASSWORD  SSH password (use this OR a key)
+  DOCKER_MCP_<NAME>_SUDO        "true" to run docker with sudo
+  DOCKER_MCP_<NAME>_SUDO_PASSWORD  sudo password (default: the SSH password)
   DOCKER_MCP_<NAME>_STACKS      folder with one sub folder per Compose stack (default /opt/stacks)
 
 Shared settings (used by every host that does not set its own):
@@ -33,6 +35,8 @@ Shared settings (used by every host that does not set its own):
   DOCKER_MCP_SSH_USER     login name. The host name is then used as the address
                           (user@name), so you only list the names in DOCKER_MCP_HOSTS.
   DOCKER_MCP_SSH_KEY      one private key for all hosts
+  DOCKER_MCP_SSH_PASSWORD one SSH password for all hosts (a host's own key or password wins)
+  DOCKER_MCP_SUDO_PASSWORD  one sudo password for all hosts (default: the SSH password)
   DOCKER_MCP_SSH_PORT     SSH port for all hosts
   DOCKER_MCP_SUDO         "true" to use `sudo -n` on all hosts
   DOCKER_MCP_STACKS       Compose stacks folder for all hosts
@@ -73,12 +77,13 @@ import posixpath
 import re
 import shlex
 import subprocess
+import time
 import functools
 from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
-__version__ = "2026.10.22.02"
+__version__ = "2026.10.23.01"
 
 mcp = FastMCP("docker")
 
@@ -165,6 +170,8 @@ def _hosts() -> dict[str, dict[str, Any]]:
     d_user = os.environ.get("DOCKER_MCP_SSH_USER", "").strip()
     d_port = os.environ.get("DOCKER_MCP_SSH_PORT", "").strip()
     d_key = os.environ.get("DOCKER_MCP_SSH_KEY", "").strip()
+    d_pw = os.environ.get("DOCKER_MCP_SSH_PASSWORD", "")
+    d_sudo_pw = os.environ.get("DOCKER_MCP_SUDO_PASSWORD", "")
     d_sudo = os.environ.get("DOCKER_MCP_SUDO")
     d_stacks = os.environ.get("DOCKER_MCP_STACKS", "").strip()
     hosts: dict[str, dict[str, Any]] = {}
@@ -186,12 +193,26 @@ def _hosts() -> dict[str, dict[str, Any]]:
             ssh = f"{d_user}@{addr}"
         sudo_raw = get("SUDO")
         stacks = (get("STACKS") or "").strip() or d_stacks or "/opt/stacks"
+        own_key = (get("SSH_KEY") or "").strip()
+        own_pw = get("SSH_PASSWORD") or ""
+        # A host's own key beats the shared password. A host's own password beats the shared key.
+        if own_pw:
+            pw, key = own_pw, ""
+        elif own_key:
+            pw, key = "", own_key
+        else:
+            pw, key = d_pw, d_key
+        if pw:
+            key = ""
+        sudo_pw = (get("SUDO_PASSWORD") or "") or d_sudo_pw or pw
         hosts[name] = {
             "name": name,
             "address": addr,
             "ssh": ssh,
             "port": (get("SSH_PORT") or "").strip() or d_port,
-            "key": (get("SSH_KEY") or "").strip() or d_key,
+            "key": key,
+            "password": pw,
+            "sudo_password": sudo_pw,
             "sudo": _truthy(sudo_raw if sudo_raw is not None else d_sudo),
             "stacks": stacks.rstrip("/") or "/",
         }
@@ -239,6 +260,68 @@ def _ssh_cmd(h: dict[str, Any], argv: list[str], cwd: str | None = None) -> list
     return cmd + ["--", h["ssh"], remote]
 
 
+def _scrub(text: str, h: dict[str, Any]) -> str:
+    """Remove the SSH and sudo passwords from any text."""
+    for secret in (h.get("password"), h.get("sudo_password")):
+        if secret:
+            text = text.replace(secret, "********")
+    return text
+
+
+def _run_password(h: dict[str, Any], argv: list[str], cwd: str | None, timeout: int | None,
+                  data: bytes | None) -> tuple[int, bytes, bytes]:
+    """Run a command over SSH with a password (paramiko). Returns (code, stdout, stderr)."""
+    try:
+        import paramiko
+    except ImportError:
+        return 127, b"", b"The paramiko package is missing. Install docker-mcp again."
+    argv = list(argv)
+    feed = b""
+    if h["sudo"] and argv and argv[0] == "docker":
+        if h["sudo_password"]:
+            argv = ["sudo", "-S", "-p", ""] + argv
+            feed = (h["sudo_password"] + "\n").encode()
+        else:
+            argv = ["sudo", "-n"] + argv
+    remote = " ".join(shlex.quote(a) for a in argv)
+    if cwd:
+        remote = f"cd {shlex.quote(cwd)} && {remote}"
+    user, _, addr = h["ssh"].rpartition("@")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # home LAN: accept key on first use
+    limit = timeout or _timeout()
+    try:
+        client.connect(addr, port=int(h["port"] or 22), username=user or None, password=h["password"],
+                       timeout=10, look_for_keys=False, allow_agent=False)
+        chan = client.get_transport().open_session()
+        chan.settimeout(limit)
+        chan.exec_command(remote)
+        if feed or data:
+            chan.sendall(feed + (data or b""))
+        chan.shutdown_write()
+        out, err = bytearray(), bytearray()
+        end = time.monotonic() + limit
+        while True:
+            got = False
+            while chan.recv_ready():
+                out += chan.recv(65536); got = True
+            while chan.recv_stderr_ready():
+                err += chan.recv_stderr(65536); got = True
+            if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
+                break
+            if time.monotonic() > end:
+                return 124, bytes(out), b"Timed out waiting for the command."
+            if not got:
+                time.sleep(0.05)
+        return chan.recv_exit_status(), bytes(out), bytes(err)
+    except paramiko.AuthenticationException:
+        return 255, b"", b"Permission denied (password). The SSH password was not accepted."
+    except Exception as exc:  # network, timeout, protocol
+        return 255, b"", f"SSH to {h['ssh']} failed: {exc}".encode()
+    finally:
+        client.close()
+
+
 def _build(h: dict[str, Any], argv: list[str], cwd: str | None) -> tuple[list[str], dict[str, Any]]:
     """Turn argv into the real command (ssh, sudo, or local docker binary)."""
     argv = list(argv)
@@ -257,6 +340,9 @@ def _build(h: dict[str, Any], argv: list[str], cwd: str | None) -> tuple[list[st
 def _exec(h: dict[str, Any], argv: list[str], cwd: str | None = None,
           timeout: int | None = None) -> tuple[int, str, str]:
     """Run a command on the host. Returns (exit code, stdout, stderr)."""
+    if h["ssh"] and h.get("password"):
+        rc, out, err = _run_password(h, argv, cwd, timeout, None)
+        return rc, _scrub(out.decode("utf-8", "replace"), h), _scrub(err.decode("utf-8", "replace"), h)
     try:
         cmd, kw = _build(h, argv, cwd)
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout or _timeout(),
@@ -271,6 +357,9 @@ def _exec(h: dict[str, Any], argv: list[str], cwd: str | None = None,
 def _exec_bytes(h: dict[str, Any], argv: list[str], cwd: str | None = None,
                 timeout: int | None = None, data: bytes | None = None) -> tuple[int, bytes, str]:
     """Like _exec, but exact bytes in and out (no newline changes). Used for files."""
+    if h["ssh"] and h.get("password"):
+        rc, out, err = _run_password(h, argv, cwd, timeout, data)
+        return rc, out, _scrub(err.decode("utf-8", "replace"), h)
     try:
         cmd, kw = _build(h, argv, cwd)
         if data is None:
@@ -297,6 +386,8 @@ def _fail(rc: int, err: str, out: str = "") -> str:
         hint = " Hint: add the user to the docker group, or set DOCKER_MCP_<NAME>_SUDO=true."
     if "a password is required" in text.lower():
         hint = " Hint: sudo needs a password. Use the docker group instead of sudo."
+    if "ssh password was not accepted" in text.lower():
+        hint = " Hint: check DOCKER_MCP_<NAME>_SSH_PASSWORD (or DOCKER_MCP_SSH_PASSWORD) and that SSH allows password login."
     if "permission denied (publickey" in text.lower():
         hint = " Hint: SSH key was not accepted. Check DOCKER_MCP_<NAME>_SSH and _SSH_KEY."
     return f"ERROR (exit {rc}): {_redact_text(text)[:1500]}{hint}"
@@ -424,6 +515,7 @@ def docker_hosts() -> str:
         row: dict[str, Any] = {
             "host": h["name"], "address": h["address"], "via": f"ssh {h['ssh']}" if h["ssh"] else "local docker",
             "sudo": h["sudo"], "stacks_folder": h["stacks"],
+            "login": "password" if h.get("password") else ("key" if h.get("key") else "default ssh key"),
         }
         if rc == 0:
             row["docker"] = out.strip()

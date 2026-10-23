@@ -7,7 +7,11 @@
         "DOCKER_MCP_HOSTS_NAME": "172.16.20.50=themedia,172.16.20.40=thedmz,172.16.20.41=thedocker01",
         "DOCKER_MCP_SSH_USER": "theadmin",
         "DOCKER_MCP_SSH_KEY": "C:\\Users\\YOU\\.ssh\\id_ed25519",
-        "DOCKER_MCP_STACKS": "/opt/stacks"
+        "DOCKER_MCP_STACKS": "/opt/stacks",
+        "DOCKER_MCP_THEVAULT_SSH": "YOUR-USER@172.16.10.11",
+        "DOCKER_MCP_THEVAULT_SSH_PASSWORD": "PUT-SSH-PASSWORD-HERE",
+        "DOCKER_MCP_THEVAULT_SUDO": "true",
+        "DOCKER_MCP_THEVAULT_STACKS": "/volume3/docker/dockhand-nas/data/stacks"
       }
     }
   }

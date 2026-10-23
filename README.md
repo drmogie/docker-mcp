@@ -3,7 +3,7 @@
 An MCP tool that lets Claude look at and manage Docker.
 
 It works with containers, images, volumes, networks, and Compose stacks.
-It connects to your Docker host over SSH with a key. Nothing is installed on the host.
+It connects to your Docker host over SSH with a key or a password. Nothing is installed on the host.
 
 ## What Claude can do
 
@@ -74,6 +74,15 @@ Destructive (needs `confirm=true` and a typed phrase):
    `uvx` downloads the tool from GitHub, so no local copy is needed. To get a newer version, run `uvx --refresh --from git+https://github.com/drmogie/docker-mcp docker-mcp` once, or pin a release with `@2026.10.20.01` after the address.
 6. Restart Claude. Ask: "list my Docker hosts".
 
+### Using a password instead of a key
+
+Good for a NAS such as a Synology that rejects keys.
+
+- Set `DOCKER_MCP_THEVAULT_SSH=user@172.16.10.11` and `DOCKER_MCP_THEVAULT_SSH_PASSWORD=your-password`.
+- If docker needs sudo, also set `DOCKER_MCP_THEVAULT_SUDO=true`. The SSH password is used for sudo too, unless you set `DOCKER_MCP_THEVAULT_SUDO_PASSWORD`.
+- The password lives only in your Claude config. It is hidden from all output.
+- Other hosts can keep using the shared key.
+
 ## Settings
 
 Set in the `env` part of the Claude config.
@@ -88,11 +97,15 @@ Set in the `env` part of the Claude config.
   - `DOCKER_MCP_NAME_SSH`: user@address. Leave empty for local docker.
   - `DOCKER_MCP_NAME_SSH_PORT`: port, default 22
   - `DOCKER_MCP_NAME_SSH_KEY`: path to the private key
-  - `DOCKER_MCP_NAME_SUDO`: `true` to run docker with `sudo -n`
+  - `DOCKER_MCP_NAME_SSH_PASSWORD`: SSH password, instead of a key
+  - `DOCKER_MCP_NAME_SUDO`: `true` to run docker with sudo (`sudo -n` with no password set)
+  - `DOCKER_MCP_NAME_SUDO_PASSWORD`: sudo password. Default: the SSH password
   - `DOCKER_MCP_NAME_STACKS`: folder with one sub folder per stack, default `/opt/stacks`
 - Shared settings, for many hosts with one key (a host's own setting always wins):
   - `DOCKER_MCP_SSH_USER`: login name. The host name is used as the address (`user@name`)
   - `DOCKER_MCP_SSH_KEY`: one private key for all hosts
+  - `DOCKER_MCP_SSH_PASSWORD`: one SSH password for all hosts. A host's own key or password wins
+  - `DOCKER_MCP_SUDO_PASSWORD`: one sudo password for all hosts
   - `DOCKER_MCP_SSH_PORT`, `DOCKER_MCP_SUDO`, `DOCKER_MCP_STACKS`: same idea
 - `DOCKER_MCP_FILE_ROOTS`: extra host folders the file, copy and build tools may use, comma separated (the stacks folder is always allowed). Per host: `DOCKER_MCP_NAME_FILE_ROOTS`
 - `DOCKER_MCP_MAX_FILE_KB`: biggest file to read or write, default 1024

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.10.23.01
+
+- SSH passwords: set `DOCKER_MCP_<NAME>_SSH_PASSWORD` for one host, or `DOCKER_MCP_SSH_PASSWORD` for all. Works like the Pi 5 tool. Uses `paramiko`, a new dependency.
+- Sudo passwords: `DOCKER_MCP_<NAME>_SUDO_PASSWORD` or `DOCKER_MCP_SUDO_PASSWORD`. Default is the SSH password.
+- A host's own key or password wins over the shared one. Hosts with keys work as before.
+- Passwords are removed from all output. `docker_hosts` shows the login type (key or password), never the password.
+
 ## 2026.10.22.02
 
 - Fix: `DOCKER_MCP_HOSTS_NAME` with `ip=name` pairs now works on its own. In `.01` the setting `DOCKER_MCP_HOSTS` was still needed.
