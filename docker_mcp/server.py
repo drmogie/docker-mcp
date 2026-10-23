@@ -27,6 +27,8 @@ For each host name (letters, digits; other characters become "_", upper case):
   DOCKER_MCP_<NAME>_SSH_KEY     path to the private key file to use
   DOCKER_MCP_<NAME>_SSH_PASSWORD  SSH password (use this OR a key)
   DOCKER_MCP_<NAME>_SUDO        "true" to run docker with sudo
+  DOCKER_MCP_<NAME>_REMOTE_DOCKER  full path of the docker program on the host, for when sudo
+                                cannot find it (Synology: /usr/local/bin/docker)
   DOCKER_MCP_<NAME>_SUDO_PASSWORD  sudo password (default: the SSH password)
   DOCKER_MCP_<NAME>_STACKS      folder with one sub folder per Compose stack (default /opt/stacks)
 
@@ -83,7 +85,7 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
-__version__ = "2026.10.23.01"
+__version__ = "2026.10.23.02"
 
 mcp = FastMCP("docker")
 
@@ -172,6 +174,7 @@ def _hosts() -> dict[str, dict[str, Any]]:
     d_key = os.environ.get("DOCKER_MCP_SSH_KEY", "").strip()
     d_pw = os.environ.get("DOCKER_MCP_SSH_PASSWORD", "")
     d_sudo_pw = os.environ.get("DOCKER_MCP_SUDO_PASSWORD", "")
+    d_remote_docker = os.environ.get("DOCKER_MCP_REMOTE_DOCKER", "").strip()
     d_sudo = os.environ.get("DOCKER_MCP_SUDO")
     d_stacks = os.environ.get("DOCKER_MCP_STACKS", "").strip()
     hosts: dict[str, dict[str, Any]] = {}
@@ -213,6 +216,7 @@ def _hosts() -> dict[str, dict[str, Any]]:
             "key": key,
             "password": pw,
             "sudo_password": sudo_pw,
+            "docker_path": (get("REMOTE_DOCKER") or "").strip() or d_remote_docker,
             "sudo": _truthy(sudo_raw if sudo_raw is not None else d_sudo),
             "stacks": stacks.rstrip("/") or "/",
         }
@@ -277,7 +281,10 @@ def _run_password(h: dict[str, Any], argv: list[str], cwd: str | None, timeout: 
         return 127, b"", b"The paramiko package is missing. Install docker-mcp again."
     argv = list(argv)
     feed = b""
-    if h["sudo"] and argv and argv[0] == "docker":
+    is_docker = bool(argv) and argv[0] == "docker"
+    if is_docker and h.get("docker_path"):
+        argv[0] = h["docker_path"]
+    if h["sudo"] and is_docker:
         if h["sudo_password"]:
             argv = ["sudo", "-S", "-p", ""] + argv
             feed = (h["sudo_password"] + "\n").encode()
@@ -325,7 +332,10 @@ def _run_password(h: dict[str, Any], argv: list[str], cwd: str | None, timeout: 
 def _build(h: dict[str, Any], argv: list[str], cwd: str | None) -> tuple[list[str], dict[str, Any]]:
     """Turn argv into the real command (ssh, sudo, or local docker binary)."""
     argv = list(argv)
-    if h["sudo"] and argv and argv[0] == "docker":
+    is_docker = bool(argv) and argv[0] == "docker"
+    if h["ssh"] and is_docker and h.get("docker_path"):
+        argv[0] = h["docker_path"]
+    if h["sudo"] and is_docker:
         argv = ["sudo", "-n"] + argv
     if h["ssh"]:
         return _ssh_cmd(h, argv, cwd), {}

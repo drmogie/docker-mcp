@@ -81,6 +81,7 @@ Good for a NAS such as a Synology that rejects keys.
 - Set `DOCKER_MCP_THEVAULT_SSH=user@172.16.10.11` and `DOCKER_MCP_THEVAULT_SSH_PASSWORD=your-password`.
 - If docker needs sudo, also set `DOCKER_MCP_THEVAULT_SUDO=true`. The SSH password is used for sudo too, unless you set `DOCKER_MCP_THEVAULT_SUDO_PASSWORD`.
 - The password lives only in your Claude config. It is hidden from all output.
+- On a Synology, also set `DOCKER_MCP_THEVAULT_REMOTE_DOCKER=/usr/local/bin/docker`, because sudo cannot find docker on its own.
 - Other hosts can keep using the shared key.
 
 ## Settings

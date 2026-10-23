@@ -11,6 +11,7 @@
         "DOCKER_MCP_THEVAULT_SSH": "YOUR-USER@172.16.10.11",
         "DOCKER_MCP_THEVAULT_SSH_PASSWORD": "PUT-SSH-PASSWORD-HERE",
         "DOCKER_MCP_THEVAULT_SUDO": "true",
+        "DOCKER_MCP_THEVAULT_REMOTE_DOCKER": "/usr/local/bin/docker",
         "DOCKER_MCP_THEVAULT_STACKS": "/volume3/docker/dockhand-nas/data/stacks"
       }
     }

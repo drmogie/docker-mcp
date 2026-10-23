@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.10.23.02
+
+- New `DOCKER_MCP_<NAME>_REMOTE_DOCKER` (and shared `DOCKER_MCP_REMOTE_DOCKER`): full path of docker on the host. Fixes `sudo: docker: command not found` on Synology, where sudo does not search /usr/local/bin. Use `/usr/local/bin/docker`.
+
 ## 2026.10.23.01
 
 - SSH passwords: set `DOCKER_MCP_<NAME>_SSH_PASSWORD` for one host, or `DOCKER_MCP_SSH_PASSWORD` for all. Works like the Pi 5 tool. Uses `paramiko`, a new dependency.
