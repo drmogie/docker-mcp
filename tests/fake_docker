@@ -36,12 +36,12 @@ elif a.startswith("inspect"):
                    "Labels": {"com.docker.compose.project": "arr-downloads", "com.docker.compose.service": "gluetun"}},
         "State": {"Status": "running", "Running": True, "ExitCode": 0, "Health": {"Status": "healthy"}},
         "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}, "NetworkMode": "THEDMZ", "PortBindings": {}},
-        "NetworkSettings": {"Networks": {"THEDMZ": {"IPAddress": "172.16.30.59"}}},
+        "NetworkSettings": {"Networks": {"THEDMZ": {"IPAddress": "192.168.1.159"}}},
         "Mounts": [{"Type": "bind", "Source": "/opt/docker/gluetun", "Destination": "/gluetun", "RW": True}],
     }]))
 elif a.startswith("volume inspect"):
     print(json.dumps([{"Name": args[-1], "Driver": "local", "Mountpoint": "/var/lib/docker/volumes/x/_data",
-                       "Options": {"type": "nfs", "o": "addr=172.16.1.11,nfsvers=3,hard", "device": ":/volume2/THEMEDIA"},
+                       "Options": {"type": "nfs", "o": "addr=192.168.1.20,nfsvers=3,hard", "device": ":/volume2/THEMEDIA"},
                        "Labels": {}, "CreatedAt": "2026-10-11T00:00:00Z"}]))
 elif a.startswith("volume ls"):
     lines({"Name": "audiobookshelf_themedia", "Driver": "local"})

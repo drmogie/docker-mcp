@@ -10,12 +10,12 @@ over SSH with a key or a password. For the machine it runs on, it runs
 Settings come from environment variables only.
 
   DOCKER_MCP_HOSTS      your hosts, comma separated. Each is a name or an IP address,
-                        for example "themedia" or "172.16.20.50"
+                        for example "themedia" or "192.168.1.150"
                         (if left empty, one host called "local" is used)
   DOCKER_MCP_HOSTS_NAME friendly names for those hosts, so you can say "themedia" and
                         Claude knows the IP. Either a list in the same order,
                         "themedia,thedmz"
-                        (leave a slot empty to skip a host: "themedia,,thedmz"), or pairs, "172.16.20.50=themedia,172.16.20.40=thedmz".
+                        (leave a slot empty to skip a host: "themedia,,thedmz"), or pairs, "192.168.1.150=themedia,192.168.1.140=thedmz".
                         The IP is still what SSH connects to. Claude can use the name or
                         the IP. The <NAME> in the settings below can be the friendly
                         name or the IP.
@@ -164,7 +164,7 @@ def _hosts() -> dict[str, dict[str, Any]]:
     if not entries:
         entries = ["local"]
     # Friendly names. DOCKER_MCP_HOSTS_NAME is either a list in the same order as
-    # DOCKER_MCP_HOSTS ("themedia,thedmz") or pairs ("172.16.20.50=themedia,...").
+    # DOCKER_MCP_HOSTS ("themedia,thedmz") or pairs ("192.168.1.150=themedia,...").
     raw_names = [n.strip() for n in os.environ.get("DOCKER_MCP_HOSTS_NAME", "").split(",")]
     pairs = {k.strip(): v.strip() for k, _, v in (x.partition("=") for x in raw_names if "=" in x) if k.strip() and v.strip()}
     plain = [x for x in raw_names if "=" not in x]
@@ -1614,7 +1614,7 @@ def docker_create(kind: str, name: str, host: str = "", driver: str = "", subnet
     Network: driver (bridge, macvlan ...), subnet, gateway, ip_range, parent (the host
     interface for macvlan, for example eth0.20), internal.
     Volume: driver (default local) and options, for example an NFS volume:
-    options {"type": "nfs", "o": "addr=172.16.1.11,nfsvers=3,hard", "device": ":/volume2/THEMEDIA"}.
+    options {"type": "nfs", "o": "addr=192.168.1.20,nfsvers=3,hard", "device": ":/volume2/THEMEDIA"}.
     """
     h, err = _pick(host)
     if not h:

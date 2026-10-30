@@ -78,7 +78,7 @@ Destructive (needs `confirm=true` and a typed phrase):
 
 Good for a NAS such as a Synology that rejects keys.
 
-- Set `DOCKER_MCP_THEVAULT_SSH=user@172.16.10.11` and `DOCKER_MCP_THEVAULT_SSH_PASSWORD=your-password`.
+- Set `DOCKER_MCP_THEVAULT_SSH=user@192.168.1.11` and `DOCKER_MCP_THEVAULT_SSH_PASSWORD=your-password`.
 - If docker needs sudo, also set `DOCKER_MCP_THEVAULT_SUDO=true`. The SSH password is used for sudo too, unless you set `DOCKER_MCP_THEVAULT_SUDO_PASSWORD`.
 - The password lives only in your Claude config. It is hidden from all output.
 - On a Synology, also set `DOCKER_MCP_THEVAULT_REMOTE_DOCKER=/usr/local/bin/docker`, because sudo cannot find docker on its own.
@@ -90,8 +90,8 @@ Set in the `env` part of the Claude config.
 
 - `DOCKER_MCP_HOSTS`: hosts, comma separated. Each one is a name or an IP address. If empty, one host called `local` uses docker on the same machine.
 - `DOCKER_MCP_HOSTS_NAME`: (easiest: just this one, as `ip=name` pairs, and `DOCKER_MCP_HOSTS` can be left out) friendly names for the hosts, so you can say "themedia" and Claude knows the IP. Optional. Two ways (a blank slot, like `themedia,,thedmz`, skips a host):
-  - a list in the same order: `DOCKER_MCP_HOSTS=172.16.20.50,172.16.20.40` and `DOCKER_MCP_HOSTS_NAME=themedia,thedmz`
-  - pairs: `DOCKER_MCP_HOSTS_NAME=172.16.20.50=themedia,172.16.20.40=thedmz`
+  - a list in the same order: `DOCKER_MCP_HOSTS=192.168.1.150,192.168.1.140` and `DOCKER_MCP_HOSTS_NAME=themedia,thedmz`
+  - pairs: `DOCKER_MCP_HOSTS_NAME=192.168.1.150=themedia,192.168.1.140=thedmz`
 
   SSH still connects to the IP. Claude can use the name or the IP, and the tool lists both. In the per-host settings below, NAME can be the friendly name or the IP with dots as underscores.
 - For each host, with NAME in capitals:

@@ -71,10 +71,10 @@ async def reads(s, log):
     check("logs: shows lines", "start ok" in t, t)
     check("logs: password and token hidden", "hunter2" not in t and "abc123" not in t and "hidden" in t, t)
     t = await call(s, "docker_inspect", {"name": "gluetun"})
-    check("inspect container: ip and health", "172.16.30.59" in t and "healthy" in t, t)
+    check("inspect container: ip and health", "192.168.1.159" in t and "healthy" in t, t)
     check("inspect container: secrets hidden, plain env kept", "hunter2" not in t and "p1234567" not in t and "PUID=1000" in t, t)
     t = await call(s, "docker_inspect", {"name": "audiobookshelf_themedia", "kind": "volume"})
-    check("inspect volume: shows nfs options", "nfsvers=3" in t and "172.16.1.11" in t, t)
+    check("inspect volume: shows nfs options", "nfsvers=3" in t and "192.168.1.20" in t, t)
     for tool, word in [("docker_stats", "300MiB"), ("docker_images", "plexinc"), ("docker_volumes", "audiobookshelf_themedia"),
                        ("docker_networks", "macvlan"), ("docker_disk_usage", "Images")]:
         t = await call(s, tool)
@@ -271,7 +271,7 @@ async def newtools(s, log):
     for bad, why in [({"volumes": ["/var/run/docker.sock:/s"]}, "docker socket"), ({"volumes": ["/etc:/e"]}, "host /etc"), ({"ports": ["80;ls"]}, "bad port"), ({"restart": "always; ls"}, "bad restart"), ({"env": {"A B": "1"}}, "bad env")]:
         t = await call(s, "docker_run", {"image": "nginx", "confirm": True, **bad})
         check(f"run: {why} refused", "NOT RUN" not in t and t.startswith(("Bad", "Path", "restart", "ERROR")) , t)
-    t = await call(s, "docker_create", {"kind": "network", "name": "THEX", "driver": "macvlan", "subnet": "172.16.40.0/24", "gateway": "172.16.40.1", "parent": "eth0.40", "confirm": True})
+    t = await call(s, "docker_create", {"kind": "network", "name": "THEX", "driver": "macvlan", "subnet": "192.168.40.0/24", "gateway": "192.168.40.1", "parent": "eth0.40", "confirm": True})
     n = [x for x in calls(log) if x["args"][:2] == ["network", "create"]]
     check("create macvlan network", t.startswith("Done") and n and "parent=eth0.40" in n[0]["args"] and "--subnet" in n[0]["args"] and n[0]["args"][-1] == "THEX", (t, n))
     t = await call(s, "docker_create", {"kind": "volume", "name": "nfsvol", "options": {"type": "nfs", "o": "addr=1.2.3.4,nfsvers=3", "device": ":/x"}, "confirm": True})
@@ -366,28 +366,28 @@ def unit_tests():
     for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
         del os.environ[k]
     # friendly names: pairs and positional list
-    os.environ.update({"DOCKER_MCP_HOSTS": "172.16.20.50,172.16.20.40,172.16.20.11", "DOCKER_MCP_SSH_USER": "theadmin",
-                       "DOCKER_MCP_HOSTS_NAME": "172.16.20.40=thedmz,172.16.20.50=themedia", "DOCKER_MCP_THEMEDIA_SUDO": "true",
-                       "DOCKER_MCP_172_16_20_40_STACKS": "/srv/dmz"})
+    os.environ.update({"DOCKER_MCP_HOSTS": "192.168.1.150,192.168.1.140,192.168.1.111", "DOCKER_MCP_SSH_USER": "theadmin",
+                       "DOCKER_MCP_HOSTS_NAME": "192.168.1.140=thedmz,192.168.1.150=themedia", "DOCKER_MCP_THEMEDIA_SUDO": "true",
+                       "DOCKER_MCP_192_168_1_140_STACKS": "/srv/dmz"})
     nh = sv._hosts()
-    check("names (pairs): friendly name, IP kept for ssh", nh["themedia"]["ssh"] == "theadmin@172.16.20.50" and nh["thedmz"]["address"] == "172.16.20.40", list(nh))
-    check("names (pairs): unnamed host keeps its IP as name", "172.16.20.11" in nh, list(nh))
+    check("names (pairs): friendly name, IP kept for ssh", nh["themedia"]["ssh"] == "theadmin@192.168.1.150" and nh["thedmz"]["address"] == "192.168.1.140", list(nh))
+    check("names (pairs): unnamed host keeps its IP as name", "192.168.1.111" in nh, list(nh))
     check("names: settings by friendly name or by IP", nh["themedia"]["sudo"] and nh["thedmz"]["stacks"] == "/srv/dmz", nh)
-    check("names: pick by name, by IP, and case", sv._pick("themedia")[0]["name"] == "themedia" and sv._pick("172.16.20.40")[0]["name"] == "thedmz" and sv._pick("TheDMZ")[0] is not None)
-    check("names: unknown host lists names with IPs", "themedia (172.16.20.50)" in sv._pick("zzz")[1], sv._pick("zzz")[1])
+    check("names: pick by name, by IP, and case", sv._pick("themedia")[0]["name"] == "themedia" and sv._pick("192.168.1.140")[0]["name"] == "thedmz" and sv._pick("TheDMZ")[0] is not None)
+    check("names: unknown host lists names with IPs", "themedia (192.168.1.150)" in sv._pick("zzz")[1], sv._pick("zzz")[1])
     os.environ["DOCKER_MCP_HOSTS_NAME"] = "themedia,thedmz"
     nl = sv._hosts()
-    check("names (list): same order as hosts", nl["themedia"]["address"] == "172.16.20.50" and nl["thedmz"]["address"] == "172.16.20.40" and "172.16.20.11" in nl, list(nl))
+    check("names (list): same order as hosts", nl["themedia"]["address"] == "192.168.1.150" and nl["thedmz"]["address"] == "192.168.1.140" and "192.168.1.111" in nl, list(nl))
     os.environ["DOCKER_MCP_HOSTS_NAME"] = ",,thedns"
     ns = sv._hosts()
-    check("names (list): empty slot keeps the IP, others still named", "172.16.20.50" in ns and "172.16.20.40" in ns and ns["thedns"]["address"] == "172.16.20.11", list(ns))
+    check("names (list): empty slot keeps the IP, others still named", "192.168.1.150" in ns and "192.168.1.140" in ns and ns["thedns"]["address"] == "192.168.1.111", list(ns))
     del os.environ["DOCKER_MCP_HOSTS_NAME"]
-    check("names are optional", list(sv._hosts()) == ["172.16.20.50", "172.16.20.40", "172.16.20.11"], list(sv._hosts()))
+    check("names are optional", list(sv._hosts()) == ["192.168.1.150", "192.168.1.140", "192.168.1.111"], list(sv._hosts()))
     for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
         del os.environ[k]
-    os.environ.update({"DOCKER_MCP_HOSTS_NAME": "172.16.20.50=themedia,172.16.20.40=thedmz", "DOCKER_MCP_SSH_USER": "theadmin"})
+    os.environ.update({"DOCKER_MCP_HOSTS_NAME": "192.168.1.150=themedia,192.168.1.140=thedmz", "DOCKER_MCP_SSH_USER": "theadmin"})
     po = sv._hosts()
-    check("pairs alone are enough (no DOCKER_MCP_HOSTS)", list(po) == ["themedia", "thedmz"] and po["thedmz"]["ssh"] == "theadmin@172.16.20.40", po)
+    check("pairs alone are enough (no DOCKER_MCP_HOSTS)", list(po) == ["themedia", "thedmz"] and po["thedmz"]["ssh"] == "theadmin@192.168.1.140", po)
     for k in [k for k in os.environ if k.startswith("DOCKER_MCP_")]:
         del os.environ[k]
     os.environ.update(keep)

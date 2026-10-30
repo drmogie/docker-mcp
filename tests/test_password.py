@@ -5,10 +5,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from docker_mcp import server as s
 
 os.environ.update({
-    "DOCKER_MCP_HOSTS_NAME": "172.16.10.11=thevault,172.16.20.50=themedia",
+    "DOCKER_MCP_HOSTS_NAME": "192.168.1.11=thevault,192.168.1.150=themedia",
     "DOCKER_MCP_SSH_USER": "theadmin",
     "DOCKER_MCP_SSH_KEY": "/k/id",
-    "DOCKER_MCP_THEVAULT_SSH": "admin@172.16.10.11",
+    "DOCKER_MCP_THEVAULT_SSH": "admin@192.168.1.11",
     "DOCKER_MCP_THEVAULT_SSH_PASSWORD": "s3cret",
     "DOCKER_MCP_THEVAULT_SUDO": "true",
 })
